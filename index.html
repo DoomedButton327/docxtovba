@@ -737,18 +737,23 @@ function generateVBA(data) {
               const part = parts[pi];
               if (part) {
                 const vbaStr = buildVbaString(part);
-                // FIX: set font props inline rather than via AFT to avoid Underline type issues
                 if (fn) lines.push(`    sel.Font.Name = "${fn}"`);
                 if (fs > 0) lines.push(`    sel.Font.Size = ${fs}`);
                 lines.push(`    sel.Font.Bold = ${ib}`);
                 lines.push(`    sel.Font.Italic = ${ii}`);
                 lines.push(`    sel.Font.Underline = ${iu}`);
                 if (fc >= 0) lines.push(`    sel.Font.Color = ${fc}`);
-                // FIX: split long VBA string into multiple TypeText calls if needed
-                const strLines = vbaStr.split('\n');
-                for (const sl of strLines) {
-                  lines.push(`    sel.TypeText ${sl}`);
-                }
+                // Emit as ONE statement — the & _ continuations from buildVbaString
+                // must stay inside the same statement, not get new sel.TypeText prefixes
+                const firstIndent = '    ';
+                const contIndent  = '                '; // align under the opening quote
+                const stmtLines = vbaStr.split('\n');
+                const fullStmt = firstIndent + 'sel.TypeText ' +
+                  stmtLines[0] +
+                  (stmtLines.length > 1
+                    ? '\n' + stmtLines.slice(1).map(l => contIndent + l.trim()).join('\n')
+                    : '');
+                lines.push(fullStmt);
               }
               if (pi < parts.length - 1) {
                 lines.push(`    sel.TypeParagraph`);
@@ -777,18 +782,14 @@ function generateVBA(data) {
             const cellText = cellParas.map(p => p.text).join(' ').replace(/\r\n|\n/g,' ').trim();
             if (cellText) {
               const vbaStr = buildVbaString(cellText);
-              // FIX: Can't assign multi-line expression to .Text directly - use a variable
-              const strLines = vbaStr.split('\n');
-              if (strLines.length === 1) {
-                lines.push(`    oTbl.Cell(${ri+1}, ${ci2+1}).Range.Text = ${vbaStr}`);
-              } else {
-                lines.push(`    Dim cellTxt${ri}_${ci2} As String`);
-                lines.push(`    cellTxt${ri}_${ci2} = ${strLines[0]}`);
-                for (let k = 1; k < strLines.length; k++) {
-                  lines.push(`    cellTxt${ri}_${ci2} = cellTxt${ri}_${ci2} & ${strLines[k].trim()}`);
-                }
-                lines.push(`    oTbl.Cell(${ri+1}, ${ci2+1}).Range.Text = cellTxt${ri}_${ci2}`);
-              }
+              const prefix = `    oTbl.Cell(${ri+1}, ${ci2+1}).Range.Text = `;
+              const contIndent = ' '.repeat(prefix.length);
+              const stmtLines = vbaStr.split('\n');
+              const fullStmt = prefix + stmtLines[0] +
+                (stmtLines.length > 1
+                  ? '\n' + stmtLines.slice(1).map(l => contIndent + l.trim()).join('\n')
+                  : '');
+              lines.push(fullStmt);
             }
           }
         }
