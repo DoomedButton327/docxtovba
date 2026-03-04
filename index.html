@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DOCX → VBA Converter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;700;800&display=swap');
+
+  :root {
+    --bg:       #0a0c10;
+    --surface:  #111318;
+    --surface2: #171b22;
+    --border:   #1e2430;
+    --cyan:     #4fc3f7;
+    --green:    #7ec850;
+    --yellow:   #ffd700;
+    --red:      #ff6b6b;
+    --purple:   #c792ea;
+    --orange:   #f78c6c;
+    --dim:      #4a5568;
+    --text:     #abb2bf;
+    --textbright:#e2e8f0;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.07) 2px, rgba(0,0,0,.07) 4px);
+    pointer-events: none; z-index: 9999;
+  }
+
+  /* ── HEADER ── */
+  header {
+    padding: 2rem 2.5rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-end; gap: 1.5rem;
+    background: linear-gradient(180deg, #0d1117 0%, var(--bg) 100%);
+  }
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800; font-size: 1.7rem;
+    color: var(--cyan);
+    letter-spacing: -0.02em;
+    line-height: 1;
+    text-shadow: 0 0 30px rgba(79,195,247,.35);
+  }
+  .logo span { color: var(--green); }
+  .tagline {
+    font-size: .7rem; color: var(--dim);
+    padding-bottom: 3px;
+    letter-spacing: .1em; text-transform: uppercase;
+  }
+
+  /* ── LAYOUT ── */
+  .workspace {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 0;
+    min-height: calc(100vh - 80px);
+  }
+
+  /* ── LEFT PANEL ── */
+  .panel-left {
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    grid-row: 1 / 3;
+  }
+
+  .upload-zone {
+    margin: 1.5rem;
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 2.5rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all .25s;
+    background: var(--surface);
+    position: relative;
+    overflow: hidden;
+  }
+  .upload-zone::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(79,195,247,.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .upload-zone:hover, .upload-zone.dragover {
+    border-color: var(--cyan);
+    background: #0d1e2d;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 30px rgba(79,195,247,.12);
+  }
+  .upload-zone input[type=file] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .upload-icon {
+    font-size: 2.5rem; margin-bottom: .8rem; display: block;
+    animation: float 3s ease-in-out infinite;
+  }
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+  .upload-title {
+    font-family: 'Syne', sans-serif; font-weight: 700;
+    font-size: 1rem; color: var(--textbright); margin-bottom: .4rem;
+  }
+  .upload-sub { font-size: .68rem; color: var(--dim); line-height: 1.5; }
+
+  /* stats */
+  .stats-panel {
+    margin: 0 1.5rem 1.5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    display: none;
+  }
+  .stats-panel.visible { display: block; }
+  .stat-row { display: flex; justify-content: space-between; padding: .3rem 0; font-size: .72rem; border-bottom: 1px solid var(--border); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--dim); }
+  .stat-val { color: var(--cyan); font-weight: 600; }
+
+  /* options */
+  .options { margin: 0 1.5rem 1.5rem; }
+  .opt-title { font-size: .65rem; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); margin-bottom: .8rem; }
+  .opt-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; font-size: .75rem; color: var(--text); cursor: pointer; }
+  .opt-row input[type=checkbox] { accent-color: var(--cyan); width: 14px; height: 14px; }
+  .opt-row:hover { color: var(--textbright); }
+
+  /* btn */
+  .btn-convert {
+    margin: 0 1.5rem 1.5rem;
+    background: linear-gradient(135deg, var(--cyan), #1a8fb5);
+    color: #000;
+    border: none; border-radius: 8px;
+    padding: .85rem 1.5rem;
+    font-family: 'Syne', sans-serif; font-weight: 700; font-size: .85rem;
+    letter-spacing: .05em; cursor: pointer;
+    width: calc(100% - 3rem);
+    transition: all .2s;
+    display: none;
+    text-transform: uppercase;
+  }
+  .btn-convert:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(79,195,247,.3); }
+  .btn-convert:active { transform: translateY(0); }
+  .btn-convert.visible { display: block; }
+
+  /* ── RIGHT PANEL ── */
+  .panel-right {
+    display: flex; flex-direction: column;
+    grid-row: 1 / 3;
+  }
+
+  .output-header {
+    padding: .85rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .output-tabs { display: flex; gap: 1px; }
+  .tab {
+    padding: .35rem .9rem; font-size: .72rem; cursor: pointer;
+    background: var(--bg); color: var(--dim);
+    border-radius: 4px 4px 0 0;
+    transition: all .15s;
+    border: 1px solid transparent;
+    border-bottom: none;
+  }
+  .tab.active { background: var(--surface2); color: var(--cyan); border-color: var(--border); }
+
+  .output-actions { display: flex; gap: .6rem; }
+  .btn-copy, .btn-dl {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px;
+    padding: .4rem .9rem; font-family: 'JetBrains Mono', monospace;
+    font-size: .7rem; cursor: pointer; transition: all .2s;
+    display: flex; align-items: center; gap: .4rem;
+  }
+  .btn-copy:hover { border-color: var(--cyan); color: var(--cyan); }
+  .btn-dl:hover { border-color: var(--green); color: var(--green); }
+
+  /* code area */
+  .code-area {
+    flex: 1; overflow: auto;
+    padding: 1.5rem;
+    background: var(--bg);
+    position: relative;
+  }
+  .placeholder {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100%; color: var(--dim); text-align: center; gap: 1rem;
+  }
+  .placeholder-icon { font-size: 4rem; opacity: .3; }
+  .placeholder-text { font-size: .8rem; line-height: 1.8; }
+
+  pre#vba-output {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: .75rem;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre;
+    tab-size: 4;
+    display: none;
+  }
+  pre#vba-output.visible { display: block; }
+
+  /* VBA syntax colouring (applied via innerHTML span injection) */
+  .vba-keyword  { color: #c792ea; font-weight: 600; }
+  .vba-string   { color: #c3e88d; }
+  .vba-comment  { color: #546e7a; font-style: italic; }
+  .vba-number   { color: #f78c6c; }
+  .vba-function { color: #82aaff; }
+  .vba-type     { color: #ffcb6b; }
+
+  /* line numbers */
+  .line-numbers {
+    position: absolute; left: 0; top: 1.5rem;
+    color: var(--dim); font-size: .7rem;
+    line-height: 1.7; padding-left: .5rem;
+    user-select: none; text-align: right;
+    width: 40px; opacity: .4;
+    display: none;
+  }
+
+  /* progress */
+  .progress-bar {
+    height: 3px; background: var(--border);
+    margin: 0 1.5rem 1.5rem; border-radius: 2px;
+    overflow: hidden; display: none;
+  }
+  .progress-bar.visible { display: block; }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--cyan), var(--green));
+    width: 0%; transition: width .3s;
+    animation: shimmer 1.5s infinite;
+  }
+  @keyframes shimmer {
+    0%{filter:brightness(1)} 50%{filter:brightness(1.4)} 100%{filter:brightness(1)}
+  }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 2rem; right: 2rem;
+    background: var(--green); color: #000;
+    padding: .7rem 1.2rem; border-radius: 8px;
+    font-size: .75rem; font-weight: 700;
+    transform: translateY(20px); opacity: 0;
+    transition: all .3s; pointer-events: none;
+    z-index: 1000;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  /* big copy banner */
+  .copy-banner {
+    display: none;
+    margin: 0;
+    padding: .7rem 1.5rem;
+    background: linear-gradient(90deg, rgba(126,200,80,.15), rgba(79,195,247,.1));
+    border-bottom: 1px solid var(--border);
+    align-items: center; justify-content: space-between; gap: 1rem;
+  }
+  .copy-banner.visible { display: flex; }
+  .copy-banner-msg { font-size: .72rem; color: var(--green); }
+  .btn-big-copy {
+    background: var(--green); color: #000;
+    border: none; border-radius: 6px;
+    padding: .5rem 1.4rem;
+    font-family: 'Syne', sans-serif; font-weight: 700; font-size: .8rem;
+    cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    transition: all .15s; letter-spacing: .04em;
+  }
+  .btn-big-copy:hover { filter: brightness(1.12); transform: scale(1.03); }
+  .btn-big-copy:active { transform: scale(.98); }
+  .btn-big-copy.copied { background: var(--cyan); }
+
+  /* how-to panel */
+  .howto {
+    margin: 0 1.5rem 1.5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .howto-title { font-size: .65rem; text-transform: uppercase; letter-spacing: .12em; color: var(--yellow); margin-bottom: .7rem; }
+  .howto-step { font-size: .7rem; color: var(--text); margin-bottom: .45rem; display: flex; gap: .5rem; line-height: 1.5; }
+  .step-num { color: var(--cyan); font-weight: 700; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">DOCX <span>→</span> VBA</div>
+  </div>
+  <div class="tagline">Convert any Word document into a self-replicating macro</div>
+</header>
+
+<div class="workspace">
+  <!-- ── LEFT ── -->
+  <div class="panel-left">
+    <div class="upload-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".docx">
+      <span class="upload-icon">📄</span>
+      <div class="upload-title">Drop your .docx here</div>
+      <div class="upload-sub">or click to browse<br>Word 2007+ (.docx) supported</div>
+    </div>
+
+    <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+
+    <div class="stats-panel" id="statsPanel">
+      <div class="stat-row"><span class="stat-label">File</span><span class="stat-val" id="statFile">—</span></div>
+      <div class="stat-row"><span class="stat-label">Paragraphs</span><span class="stat-val" id="statParas">—</span></div>
+      <div class="stat-row"><span class="stat-label">Tables</span><span class="stat-val" id="statTables">—</span></div>
+      <div class="stat-row"><span class="stat-label">VBA Lines</span><span class="stat-val" id="statLines">—</span></div>
+      <div class="stat-row"><span class="stat-label">Subs generated</span><span class="stat-val" id="statSubs">—</span></div>
+    </div>
+
+    <div class="options">
+      <div class="opt-title">Options</div>
+      <label class="opt-row"><input type="checkbox" id="optFonts" checked> Preserve font styles</label>
+      <label class="opt-row"><input type="checkbox" id="optColors" checked> Preserve text colors</label>
+      <label class="opt-row"><input type="checkbox" id="optTables" checked> Include tables</label>
+      <label class="opt-row"><input type="checkbox" id="optPageBreaks" checked> Page breaks</label>
+      <label class="opt-row"><input type="checkbox" id="optCompact"> Compact output (fewer comments)</label>
+    </div>
+
+    <button class="btn-convert" id="btnConvert" onclick="runConvert()">⚡ Generate VBA Macro</button>
+
+    <div class="howto">
+      <div class="howto-title">How to use</div>
+      <div class="howto-step"><span class="step-num">1.</span> Upload your .docx file above</div>
+      <div class="howto-step"><span class="step-num">2.</span> Click Generate VBA Macro</div>
+      <div class="howto-step"><span class="step-num">3.</span> Copy the generated code</div>
+      <div class="howto-step"><span class="step-num">4.</span> Open Word on target PC → Alt+F11</div>
+      <div class="howto-step"><span class="step-num">5.</span> Insert → Module, paste &amp; Run</div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT ── -->
+  <div class="panel-right">
+    <div class="output-header">
+      <div class="output-tabs">
+        <div class="tab active" id="tabVba" onclick="switchTab('vba')">VBA Macro</div>
+        <div class="tab" id="tabRaw" onclick="switchTab('raw')">Raw XML</div>
+      </div>
+      <div class="output-actions">
+        <button class="btn-copy" onclick="copyCode()">⎘ Copy</button>
+        <button class="btn-dl" onclick="downloadCode()">↓ Download .bas</button>
+      </div>
+    </div>
+
+    <div class="copy-banner" id="copyBanner">
+      <span class="copy-banner-msg">✓ Macro generated — copy it and paste into Word's VBA editor (Alt+F11 → Insert → Module)</span>
+      <button class="btn-big-copy" id="btnBigCopy" onclick="bigCopy()">⎘ COPY MACRO</button>
+    </div>
+
+    <div class="code-area" id="codeArea">
+      <div class="placeholder" id="placeholder">
+        <div class="placeholder-icon">🖥️</div>
+        <div class="placeholder-text">
+          Upload a .docx file and click<br>
+          <strong style="color:var(--cyan)">Generate VBA Macro</strong><br>
+          to see the output here
+        </div>
+      </div>
+      <pre id="vba-output"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">✓ Copied to clipboard!</div>
+
+<script>
+// ── State ──
+let parsedData = null;
+let rawXml = '';
+let currentTab = 'vba';
+let vbaCode = '';
+
+const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+// ── Big copy button ──
+function bigCopy() {
+  const text = vbaCode;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('btnBigCopy');
+    btn.textContent = '✓ COPIED!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '⎘ COPY MACRO'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+// ── File drag & drop ──
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.docx')) processFile(f);
+  else alert('Please drop a .docx file');
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) processFile(fileInput.files[0]); });
+
+// ── Process file ──
+async function processFile(file) {
+  setProgress(10);
+  document.getElementById('statFile').textContent = file.name.length > 20 ? file.name.slice(0,18)+'…' : file.name;
+
+  try {
+    const zip = await JSZip.loadAsync(file);
+    setProgress(30);
+
+    const docFile = zip.file('word/document.xml');
+    if (!docFile) { alert('Invalid .docx — cannot find document.xml'); return; }
+
+    rawXml = await docFile.async('string');
+    setProgress(60);
+
+    let stylesXml = '';
+    const stylesFile = zip.file('word/styles.xml');
+    if (stylesFile) stylesXml = await stylesFile.async('string');
+
+    parsedData = parseDocx(rawXml, stylesXml);
+    setProgress(90);
+
+    document.getElementById('statsPanel').classList.add('visible');
+    document.getElementById('statParas').textContent = parsedData.paragraphs.length;
+    document.getElementById('statTables').textContent = parsedData.tables;
+    document.getElementById('btnConvert').classList.add('visible');
+
+    setProgress(100);
+    setTimeout(() => document.getElementById('progressBar').classList.remove('visible'), 600);
+  } catch(e) {
+    console.error(e);
+    alert('Error parsing file: ' + e.message);
+  }
+}
+
+// ── DOCX Parser ──
+function parseDocx(docXml, stylesXml) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(docXml, 'application/xml');
+
+  const body = doc.getElementsByTagNameNS(W, 'body')[0];
+  if (!body) return { paragraphs: [], tables: 0 };
+
+  const items = [];
+  let tableCount = 0;
+
+  for (const child of body.childNodes) {
+    const local = child.localName;
+    if (local === 'p') {
+      const para = parseParagraph(child);
+      if (para) items.push({ type: 'para', ...para });
+    } else if (local === 'tbl') {
+      tableCount++;
+      const tbl = parseTable(child);
+      items.push({ type: 'table', ...tbl });
+    } else if (local === 'sdt') {
+      // structured doc tag — recurse into sdtContent
+      const content = child.getElementsByTagNameNS(W, 'sdtContent')[0];
+      if (content) {
+        for (const c of content.childNodes) {
+          if (c.localName === 'p') {
+            const para = parseParagraph(c);
+            if (para) items.push({ type: 'para', ...para });
+          }
+        }
+      }
+    }
+  }
+
+  return { paragraphs: items.filter(i => i.type === 'para'), tables: tableCount, items };
+}
+
+function parseParagraph(pEl) {
+  const pPr = pEl.getElementsByTagNameNS(W, 'pPr')[0];
+  let style = 'Normal';
+  let align = 'left';
+  let isPageBreak = false;
+
+  if (pPr) {
+    const pStyle = pPr.getElementsByTagNameNS(W, 'pStyle')[0];
+    if (pStyle) style = pStyle.getAttributeNS(W, 'val') || 'Normal';
+    const jc = pPr.getElementsByTagNameNS(W, 'jc')[0];
+    if (jc) align = jc.getAttributeNS(W, 'val') || 'left';
+  }
+
+  const runs = [];
+  for (const child of pEl.childNodes) {
+    if (child.localName === 'r') {
+      // check for page break
+      const br = child.getElementsByTagNameNS(W, 'br')[0];
+      if (br && br.getAttributeNS(W, 'type') === 'page') isPageBreak = true;
+      const run = parseRun(child);
+      if (run) runs.push(run);
+    } else if (child.localName === 'hyperlink') {
+      for (const rc of child.childNodes) {
+        if (rc.localName === 'r') {
+          const run = parseRun(rc);
+          if (run) runs.push(run);
+        }
+      }
+    } else if (child.localName === 'ins' || child.localName === 'del') {
+      for (const rc of child.childNodes) {
+        if (rc.localName === 'r') {
+          const run = parseRun(rc);
+          if (run && child.localName !== 'del') runs.push(run);
+        }
+      }
+    }
+  }
+
+  const text = runs.map(r => r.text).join('');
+  return { style, align, runs, text, isPageBreak };
+}
+
+function parseRun(rEl) {
+  const rPr = rEl.getElementsByTagNameNS(W, 'rPr')[0];
+  let bold = false, italic = false, underline = false;
+  let fontName = '', fontSize = 0;
+  let color = '', highlight = '';
+
+  if (rPr) {
+    bold = !!rPr.getElementsByTagNameNS(W, 'b')[0];
+    italic = !!rPr.getElementsByTagNameNS(W, 'i')[0];
+    underline = !!rPr.getElementsByTagNameNS(W, 'u')[0];
+    const fonts = rPr.getElementsByTagNameNS(W, 'rFonts')[0];
+    if (fonts) fontName = fonts.getAttributeNS(W, 'ascii') || fonts.getAttributeNS(W, 'hAnsi') || '';
+    const sz = rPr.getElementsByTagNameNS(W, 'sz')[0];
+    if (sz) fontSize = parseInt(sz.getAttributeNS(W, 'val') || '0') / 2;
+    const col = rPr.getElementsByTagNameNS(W, 'color')[0];
+    if (col) {
+      const cv = col.getAttributeNS(W, 'val');
+      if (cv && cv !== 'auto') color = cv;
+    }
+    const hi = rPr.getElementsByTagNameNS(W, 'highlight')[0];
+    if (hi) highlight = hi.getAttributeNS(W, 'val') || '';
+  }
+
+  let text = '';
+  for (const child of rEl.childNodes) {
+    if (child.localName === 't') {
+      text += child.textContent || '';
+    } else if (child.localName === 'tab') {
+      text += '\t';
+    } else if (child.localName === 'br') {
+      const type = child.getAttributeNS(W, 'type');
+      if (!type || type === '') text += '\n'; // line break
+    }
+  }
+
+  if (!text) return null;
+  return { text, bold, italic, underline, fontName, fontSize, color };
+}
+
+function parseTable(tblEl) {
+  const rows = [];
+  const trEls = tblEl.getElementsByTagNameNS(W, 'tr');
+  for (const tr of trEls) {
+    const cells = [];
+    const tcEls = tr.getElementsByTagNameNS(W, 'tc');
+    for (const tc of tcEls) {
+      const cellParas = [];
+      for (const p of tc.getElementsByTagNameNS(W, 'p')) {
+        const para = parseParagraph(p);
+        if (para) cellParas.push(para);
+      }
+      cells.push(cellParas);
+    }
+    rows.push(cells);
+  }
+  return { rows };
+}
+
+// ── VBA Generator ──
+function runConvert() {
+  if (!parsedData) return;
+  vbaCode = generateVBA(parsedData);
+  const lines = vbaCode.split('\n').length;
+  const subs = (vbaCode.match(/^Sub |^Private Sub /gm) || []).length;
+  document.getElementById('statLines').textContent = lines.toLocaleString();
+  document.getElementById('statSubs').textContent = subs;
+
+  const out = document.getElementById('vba-output');
+  out.innerHTML = syntaxHighlight(vbaCode);
+  out.classList.add('visible');
+  document.getElementById('placeholder').style.display = 'none';
+  document.getElementById('copyBanner').classList.add('visible');
+}
+
+function generateVBA(data) {
+  const opts = {
+    fonts: document.getElementById('optFonts').checked,
+    colors: document.getElementById('optColors').checked,
+    tables: document.getElementById('optTables').checked,
+    pageBreaks: document.getElementById('optPageBreaks').checked,
+    compact: document.getElementById('optCompact').checked,
+  };
+
+  const lines = [];
+  const CHUNK = 80; // items per sub
+  const items = data.items;
+
+  // Split into chunks
+  const chunks = [];
+  for (let i = 0; i < items.length; i += CHUNK) chunks.push(items.slice(i, i + CHUNK));
+
+  const c = (s) => opts.compact ? '' : s; // conditional comment
+
+  lines.push(`' ====================================================`);
+  lines.push(`' Auto-generated VBA Document Macro`);
+  lines.push(`' Paste into Word VBA Editor: Alt+F11 > Insert > Module`);
+  lines.push(`' Then press F5 or run Sub RecreateDocument()`);
+  lines.push(`' ====================================================`);
+  lines.push(`' Generated: ${new Date().toLocaleString()}`);
+  lines.push(`' Paragraphs: ${data.paragraphs.length} | Tables: ${data.tables}`);
+  lines.push(``);
+  lines.push(`Option Explicit`);
+  lines.push(``);
+  lines.push(`' ----------------------------------------------------`);
+  lines.push(`' MAIN ENTRY POINT`);
+  lines.push(`' ----------------------------------------------------`);
+  lines.push(`Sub RecreateDocument()`);
+  lines.push(`    Dim oDoc As Document`);
+  lines.push(`    Set oDoc = Documents.Add`);
+  lines.push(`    oDoc.Content.Delete`);
+  lines.push(`    Application.ScreenUpdating = False`);
+  lines.push(`    oDoc.Range(0, 0).Select`);
+  lines.push(``);
+  for (let i = 0; i < chunks.length; i++) {
+    lines.push(`    Call DocPart${String(i + 1).padStart(3, '0')}(oDoc)`);
+  }
+  lines.push(``);
+  lines.push(`    Application.ScreenUpdating = True`);
+  lines.push(`    MsgBox "Document recreated! " & oDoc.Paragraphs.Count & " paragraphs.", vbInformation, "DOCX Recreated"`);
+  lines.push(`End Sub`);
+  lines.push(``);
+
+  // Helper sub
+  // Map style names to Word constants
+  const styleMap = {
+    'Normal': 'Normal', 'Heading1': 'Heading 1', 'Heading2': 'Heading 2',
+    'Heading3': 'Heading 3', 'Heading4': 'Heading 4', 'Heading5': 'Heading 5',
+    'Title': 'Title', 'Subtitle': 'Subtitle', 'Quote': 'Quote',
+    'IntenseQuote': 'Intense Quote', 'ListParagraph': 'List Paragraph',
+    'Caption': 'Caption', 'Code': 'Code',
+  };
+
+  // Generate chunk subs
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci];
+    lines.push(`' -------------------------------------------------`);
+    lines.push(`' CHUNK ${ci + 1} of ${chunks.length}`);
+    lines.push(`' -------------------------------------------------`);
+    lines.push(`Private Sub DocPart${String(ci + 1).padStart(3, '0')}(oDoc As Document)`);
+    lines.push(`    Dim sel As Selection`);
+    // FIX: Declare oTbl ONCE at the top of the sub, not inside the loop
+    const hasTable = chunk.some(item => item.type === 'table');
+    if (hasTable && opts.tables) {
+      lines.push(`    Dim oTbl As Object`);
+    }
+    lines.push(`    Application.Selection.Document.Activate`);
+    lines.push(`    Set sel = Application.Selection`);
+    lines.push(``);
+
+    for (const item of chunk) {
+      if (item.type === 'para') {
+        const para = item;
+        if (!opts.compact) lines.push(`    ' -- [${para.style}] "${para.text.slice(0,50).replace(/['"]/g,'').replace(/\n/g,' ')}${para.text.length > 50 ? '...' : ''}"`);
+
+        // Page break
+        if (para.isPageBreak && opts.pageBreaks) {
+          lines.push(`    sel.InsertBreak Type:=wdPageBreak`);
+          lines.push(``);
+          continue;
+        }
+
+        // Set style - FIX: use ActiveDocument.Styles safer approach
+        const styleName = styleMap[para.style] || para.style.replace(/([A-Z])/g, ' $1').trim() || 'Normal';
+        lines.push(`    On Error Resume Next`);
+        lines.push(`    sel.Style = "${escapevba(styleName)}"`);
+        lines.push(`    On Error GoTo 0`);
+
+        // Set alignment
+        const alignMap = { left: 'wdAlignParagraphLeft', center: 'wdAlignParagraphCenter', right: 'wdAlignParagraphRight', both: 'wdAlignParagraphJustify', justify: 'wdAlignParagraphJustify' };
+        const vbaAlign = alignMap[para.align] || 'wdAlignParagraphLeft';
+        if (para.align && para.align !== 'left') {
+          lines.push(`    sel.ParagraphFormat.Alignment = ${vbaAlign}`);
+        }
+
+        if (para.runs.length === 0) {
+          lines.push(`    sel.TypeParagraph`);
+        } else {
+          for (const run of para.runs) {
+            const txt = run.text;
+            if (!txt) continue;
+            const fn = (opts.fonts && run.fontName) ? escapevba(run.fontName) : '';
+            const fs = (opts.fonts && run.fontSize > 0) ? run.fontSize : 0;
+            const ib = run.bold ? 'True' : 'False';
+            const ii = run.italic ? 'True' : 'False';
+            // FIX: Underline uses WdUnderline enum, not boolean
+            const iu = run.underline ? 'wdUnderlineSingle' : 'wdUnderlineNone';
+            let fc = -1;
+            if (opts.colors && run.color && run.color.length === 6) {
+              try {
+                const r = parseInt(run.color.slice(0,2),16);
+                const g = parseInt(run.color.slice(2,4),16);
+                const b = parseInt(run.color.slice(4,6),16);
+                // VBA RGB() stores as r + g*256 + b*65536
+                fc = r + g * 256 + b * 65536;
+              } catch(e) { fc = -1; }
+            }
+
+            // Handle line breaks inside run text
+            const parts = txt.split('\n');
+            for (let pi = 0; pi < parts.length; pi++) {
+              const part = parts[pi];
+              if (part) {
+                const vbaStr = buildVbaString(part);
+                // FIX: set font props inline rather than via AFT to avoid Underline type issues
+                if (fn) lines.push(`    sel.Font.Name = "${fn}"`);
+                if (fs > 0) lines.push(`    sel.Font.Size = ${fs}`);
+                lines.push(`    sel.Font.Bold = ${ib}`);
+                lines.push(`    sel.Font.Italic = ${ii}`);
+                lines.push(`    sel.Font.Underline = ${iu}`);
+                if (fc >= 0) lines.push(`    sel.Font.Color = ${fc}`);
+                // FIX: split long VBA string into multiple TypeText calls if needed
+                const strLines = vbaStr.split('\n');
+                for (const sl of strLines) {
+                  lines.push(`    sel.TypeText ${sl}`);
+                }
+              }
+              if (pi < parts.length - 1) {
+                lines.push(`    sel.TypeParagraph`);
+              }
+            }
+          }
+          lines.push(`    sel.TypeParagraph`);
+          lines.push(`    sel.Font.Reset`);
+        }
+        lines.push(``);
+
+      } else if (item.type === 'table' && opts.tables) {
+        const tbl = item;
+        if (!opts.compact) lines.push(`    ' -- Table (${tbl.rows.length} rows x ${tbl.rows[0]?.length || 0} cols)`);
+        const rows = tbl.rows.length;
+        const cols = Math.max(...tbl.rows.map(r => r.length), 1);
+        // FIX: oTbl declared at top of sub, just use Set here
+        lines.push(`    Set oTbl = oDoc.Tables.Add(sel.Range, ${rows}, ${cols})`);
+        lines.push(`    oTbl.Style = "Table Grid"`);
+        lines.push(`    oTbl.Borders.InsideLineStyle = wdLineStyleSingle`);
+        lines.push(`    oTbl.Borders.OutsideLineStyle = wdLineStyleSingle`);
+
+        for (let ri = 0; ri < tbl.rows.length; ri++) {
+          for (let ci2 = 0; ci2 < tbl.rows[ri].length; ci2++) {
+            const cellParas = tbl.rows[ri][ci2];
+            const cellText = cellParas.map(p => p.text).join(' ').replace(/\r\n|\n/g,' ').trim();
+            if (cellText) {
+              const vbaStr = buildVbaString(cellText);
+              // FIX: Can't assign multi-line expression to .Text directly - use a variable
+              const strLines = vbaStr.split('\n');
+              if (strLines.length === 1) {
+                lines.push(`    oTbl.Cell(${ri+1}, ${ci2+1}).Range.Text = ${vbaStr}`);
+              } else {
+                lines.push(`    Dim cellTxt${ri}_${ci2} As String`);
+                lines.push(`    cellTxt${ri}_${ci2} = ${strLines[0]}`);
+                for (let k = 1; k < strLines.length; k++) {
+                  lines.push(`    cellTxt${ri}_${ci2} = cellTxt${ri}_${ci2} & ${strLines[k].trim()}`);
+                }
+                lines.push(`    oTbl.Cell(${ri+1}, ${ci2+1}).Range.Text = cellTxt${ri}_${ci2}`);
+              }
+            }
+          }
+        }
+        // Move cursor after the table
+        lines.push(`    Dim afterTbl As Range`);
+        lines.push(`    Set afterTbl = oDoc.Range(oTbl.Range.End, oTbl.Range.End)`);
+        lines.push(`    afterTbl.Select`);
+        lines.push(`    sel.TypeParagraph`);
+        lines.push(``);
+      }
+    }
+
+    lines.push(`End Sub`);
+    lines.push(``);
+  }
+
+  return lines.join('\n');
+}
+
+// ── VBA String Builder (FIXED) ──
+// Converts any JS string into a valid VBA string expression:
+//   - Special/control chars → Chr(N)
+//   - Double quotes → Chr(34)
+//   - Chunks of >150 normal chars split into separate string literals
+//   - Lines >200 chars wrapped with VBA line continuation "& _\n        "
+function buildVbaString(text) {
+  if (!text) return '""';
+
+  // Step 1: tokenise into string-literal segments and Chr() calls
+  const CHUNK = 150;
+  const tokens = [];
+  let buf = '';
+
+  const flushBuf = () => {
+    if (buf) { tokens.push(`"${buf}"`); buf = ''; }
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const code = text.charCodeAt(i);
+
+    if (ch === '"') {
+      flushBuf();
+      tokens.push('Chr(34)');
+    } else if (code < 32 || code === 127) {
+      // Control characters — convert to Chr()
+      flushBuf();
+      if      (code === 9)  tokens.push('Chr(9)');
+      else if (code === 10) tokens.push('Chr(10)');
+      else if (code === 13) tokens.push('Chr(13)');
+      else                  tokens.push(`Chr(${code})`);
+    } else if (code > 127) {
+      // Extended / Unicode — use Chr() for safety in ANSI VBA
+      flushBuf();
+      tokens.push(`Chr(${code})`);
+    } else {
+      buf += ch;
+      // Split at CHUNK boundary to avoid long literals
+      if (buf.length >= CHUNK) flushBuf();
+    }
+  }
+  flushBuf();
+
+  if (tokens.length === 0) return '""';
+
+  // Step 2: join tokens, wrapping at ~200 chars with VBA line continuation
+  const LINE_MAX = 200;
+  const INDENT   = '        '; // 8 spaces for continuation lines
+  let result = '';
+  let lineLen = 0;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (i === 0) {
+      result = tok;
+      lineLen = tok.length;
+    } else {
+      const connector = ' & ';
+      if (lineLen + connector.length + tok.length > LINE_MAX) {
+        // Wrap: end current line with continuation, start new line
+        result += ' & _\n' + INDENT + tok;
+        lineLen = INDENT.length + tok.length;
+      } else {
+        result += connector + tok;
+        lineLen += connector.length + tok.length;
+      }
+    }
+  }
+
+  return result;
+}
+
+function escapevba(str) {
+  return str.replace(/"/g, "'").replace(/[\r\n]/g, ' ');
+}
+
+// ── Syntax Highlighting (FIXED: escape HTML first, then regex on safe text only) ──
+function syntaxHighlight(code) {
+  // Step 1: HTML-escape the raw code
+  const escaped = code
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Step 2: Process line by line so comments don't get keyword-highlighted
+  return escaped.split('\n').map(line => {
+    // Find comment start (apostrophe not inside a string)
+    let commentIdx = -1;
+    let inStr = false;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') inStr = !inStr;
+      if (!inStr && line[i] === "'") { commentIdx = i; break; }
+    }
+
+    let codePart = commentIdx >= 0 ? line.slice(0, commentIdx) : line;
+    const commentPart = commentIdx >= 0 ? line.slice(commentIdx) : '';
+
+    // Highlight string literals in code part
+    codePart = codePart.replace(/"[^"]*"/g, m => `<span class="vba-string">${m}</span>`);
+    // Highlight numbers (not inside spans)
+    codePart = codePart.replace(/(?<![a-zA-Z_])(\d+)(?![a-zA-Z_])/g, m => `<span class="vba-number">${m}</span>`);
+    // Keywords
+    const KW = /\b(Sub|End Sub|End If|End With|End Function|Dim|As|Set|Call|If|Then|Else|ElseIf|For|Next|Each|In|Do|Loop|While|Wend|Select|Case|Exit|Function|Return|With|Public|Private|Option|Explicit|True|False|New|Nothing|On|Error|Resume|GoTo|Not|And|Or|Mod|ByVal|ByRef|ReDim|Preserve|Is|Let|Const)\b/g;
+    codePart = codePart.replace(KW, m => `<span class="vba-keyword">${m}</span>`);
+    // Built-in functions
+    const FN = /\b(MsgBox|InputBox|Chr|Left|Right|Mid|Len|Trim|UCase|LCase|CStr|CInt|CLng|CDbl|CBool|IIf|IsNull|IsEmpty|IsObject|Now|Date|Time|Format|Split|Join|Replace|InStr|InStrRev|TypeName)\b/g;
+    codePart = codePart.replace(FN, m => `<span class="vba-function">${m}</span>`);
+    // Types
+    const TY = /\b(String|Integer|Long|Double|Single|Boolean|Variant|Object|Document|Selection|Range|Table|Font)\b/g;
+    codePart = codePart.replace(TY, m => `<span class="vba-type">${m}</span>`);
+    // WD constants
+    codePart = codePart.replace(/\bwd[A-Z][A-Za-z]+\b/g, m => `<span class="vba-type">${m}</span>`);
+
+    const commentHtml = commentPart ? `<span class="vba-comment">${commentPart}</span>` : '';
+    return codePart + commentHtml;
+  }).join('\n');
+}
+
+// ── Tab switching ──
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tabVba').classList.toggle('active', tab === 'vba');
+  document.getElementById('tabRaw').classList.toggle('active', tab === 'raw');
+  const out = document.getElementById('vba-output');
+
+  if (tab === 'vba' && vbaCode) {
+    out.innerHTML = syntaxHighlight(vbaCode);
+    out.classList.add('visible');
+  } else if (tab === 'raw' && rawXml) {
+    out.textContent = rawXml;
+    out.classList.add('visible');
+    document.getElementById('placeholder').style.display = 'none';
+  } else if (!vbaCode && !rawXml) {
+    out.classList.remove('visible');
+    document.getElementById('placeholder').style.display = '';
+  }
+}
+
+// ── Copy & Download ──
+function copyCode() {
+  const text = currentTab === 'vba' ? vbaCode : rawXml;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => showToast());
+}
+
+function downloadCode() {
+  const text = currentTab === 'vba' ? vbaCode : rawXml;
+  if (!text) return;
+  const ext = currentTab === 'vba' ? '.bas' : '.xml';
+  const a = document.createElement('a');
+  a.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(text);
+  a.download = 'document_macro' + ext;
+  a.click();
+}
+
+function showToast() {
+  const t = document.getElementById('toast');
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function setProgress(pct) {
+  const bar = document.getElementById('progressBar');
+  bar.classList.add('visible');
+  document.getElementById('progressFill').style.width = pct + '%';
+}
+</script>
+</body>
+</html>
